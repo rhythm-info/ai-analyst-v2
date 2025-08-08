@@ -1,0 +1,14 @@
+streamlit
+pandas
+sqlalchemy
+langchain
+langchain-community
+langchain-experimental
+langchain-groq
+faiss-cpu
+huggingface-hub
+sentence-transformers
+matplotlib
+seaborn
+python-dotenv
+tenacity<9.0.0
