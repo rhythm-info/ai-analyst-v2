@@ -1,6 +1,8 @@
+import os
 import io
+import json
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
 from sqlalchemy import Engine
 from langchain_groq import ChatGroq
 from langchain.agents import create_tool_calling_agent, AgentExecutor
@@ -8,10 +10,12 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.tools import StructuredTool
 from pydantic import BaseModel
 from typing import Optional
+from langchain_community.utilities import SQLDatabase
+from modules.smart_sql_tool import SmartSQLQueryTool
 from modules.plot_registry import get_plot_function
 
-# --- Pydantic Schemas ---
 
+# --- Pydantic Schemas ---
 class TableOnlyInput(BaseModel):
     table_name: str
 
@@ -30,8 +34,8 @@ class YearlyPlotInput(BaseModel):
     table_name: str
     date_column: str
 
-# --- Core Analytics ---
 
+# --- Core Analytics ---
 def get_data_summary(engine: Engine, table_name: str) -> str:
     try:
         df = pd.read_sql_table(table_name, con=engine)
@@ -67,7 +71,6 @@ def count_categorical_variable(engine: Engine, table_name: str, column_name: str
 def create_interactive_plot(table_name: str, plot_type: str, x: str, y: Optional[str] = None, color: Optional[str] = None, engine: Engine = None) -> str:
     try:
         df = pd.read_sql_query(f"SELECT * FROM {table_name}", engine)
-
         if y == "count" or y is None:
             df = df.groupby(x).size().reset_index(name="count")
             y = "count"
@@ -76,12 +79,12 @@ def create_interactive_plot(table_name: str, plot_type: str, x: str, y: Optional
         if not plot_func:
             raise ValueError(f"Unsupported plot type: {plot_type}")
 
-        # Determine parameters for plotting
         kwargs = {"x": x, "y": y}
         if color:
             kwargs["color"] = color
 
         fig = plot_func(df, **kwargs)
+        # Return the JSON string wrapped so UI can detect it
         return f"[PLOTLY_JSON]{fig.to_json()}[/PLOTLY_JSON]"
     except Exception as e:
         return f"Error creating plot: {e}"
@@ -101,17 +104,21 @@ def create_yearly_summary_plot(engine: Engine, table_name: str, date_column: str
     except Exception as e:
         return f"Error creating yearly summary plot: {e}"
 
-# --- Agent Initialization ---
 
+# --- Agent Initialization ---
 def initialize_agent(engine, retriever_tool):
     llm = ChatGroq(
         model_name="llama3-70b-8192",
         temperature=0,
-        groq_api_key = os.getenv("GROQ_API_KEY")
+        groq_api_key=os.getenv("GROQ_API_KEY")
     )
+
+    db = SQLDatabase(engine)
+    smart_sql_tool = SmartSQLQueryTool(db=db)
 
     tools = [
         retriever_tool,
+        smart_sql_tool,
 
         StructuredTool.from_function(
             name="analyze_data_summary",
@@ -153,10 +160,11 @@ def initialize_agent(engine, retriever_tool):
 
     🔁 WORKFLOW:
     1. Use `schema_and_relationship_retriever` to understand tables and columns.
-    2. Use `count_categorical_variable` for any question about counts, totals, or breakdowns.
-    3. Use `create_yearly_summary_plot` to visualize trends over years.
-    4. Use `create_interactive_plot` for visualizations like bar, scatter, histogram.
-    5. Use `analyze_data_summary` to summarize a table.
+    2. Use `smart_sql_query` for fetching specific rows or executing SQL queries.
+    3. Use `count_categorical_variable` for counts, totals, or breakdowns.
+    4. Use `create_yearly_summary_plot` to visualize yearly trends.
+    5. Use `create_interactive_plot` for visualizations like bar, scatter, histogram.
+    6. Use `analyze_data_summary` to summarize a table.
 
     🔒 DO NOT write Python code manually.
     ✅ ALWAYS return a final answer after using a tool.
@@ -173,3 +181,22 @@ def initialize_agent(engine, retriever_tool):
     executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
     return executor
+
+
+# --- Helper for UI integration ---
+def parse_and_render_plotly_json(plotly_json_str, st):
+    """
+    Call this in your Streamlit app to render the plotly JSON returned by the agent.
+
+    Args:
+        plotly_json_str (str): The full string with [PLOTLY_JSON]...[/PLOTLY_JSON] wrapper.
+        st (module): Streamlit module imported as `import streamlit as st`
+    """
+    # Strip tags
+    if plotly_json_str.startswith("[PLOTLY_JSON]") and plotly_json_str.endswith("[/PLOTLY_JSON]"):
+        json_str = plotly_json_str[len("[PLOTLY_JSON]"):-len("[/PLOTLY_JSON]")]
+        fig_dict = json.loads(json_str)
+        fig = go.Figure(fig_dict)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.write(plotly_json_str)

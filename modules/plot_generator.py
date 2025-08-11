@@ -1,5 +1,6 @@
 # plot_generator.py
 import pandas as pd
+import plotly.express as px
 from modules.plot_registry import get_plot_function
 
 def generate_plot(plot_type: str, data: pd.DataFrame, x: str, y: str = None, color: str = None, title: str = "") -> str:
