@@ -160,49 +160,52 @@ def display_quick_visualizer(engine, table_names):
 def display_chat_interface():
     st.header("💬 Chat with your Data")
 
-    # Clear chat control in a sidebar-like layout within the tab
     if st.button("🗑️ Clear Chat History"):
         st.session_state.messages = []
         st.session_state.generated_codes = []
+        st.session_state.logs = []
         st.rerun()
 
-    # 1. Display all messages from the session state history
-    # This loop is now the single source of truth for rendering.
+    # Display messages
     for msg in st.session_state.get("messages", []):
         with st.chat_message(msg["role"]):
             content = msg.get("content", "")
-            # The helper function is called here for any assistant message containing a plot
             if msg["role"] == "assistant" and "[PLOTLY_JSON]" in content:
                 render_plotly_from_marker(content)
             else:
                 st.markdown(content)
 
-    # 2. Handle new user input at the bottom
+    # New user input
     if prompt := st.chat_input("Ask the agent to analyze, query or plot"):
-        # Add user's message to state and display it immediately
         st.session_state.messages.append({"role": "user", "content": prompt})
-        
-        # Get the agent's response
+
         with st.spinner("Thinking..."):
             try:
                 agent_executor = st.session_state.agent_executor
                 chat_history = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages]
-                
-                # Invoke the agent
-                response = agent_executor.invoke({"input": prompt, "chat_history": chat_history})
-                answer = response.get("output") if isinstance(response, dict) else str(response)
 
-                # 3. Add the agent's full response (including plot JSON) to the state
-                st.session_state.messages.append({"role": "assistant", "content": answer})
+                # Invoke the agent
+                result = agent_executor.invoke({"input": prompt, "chat_history": chat_history})
+
+                # Render table if SQL result exists
+                if isinstance(result, dict) and result.get("status") == "success" and "data" in result:
+                    df = pd.DataFrame(result["data"])
+                    st.write("### Query Result")
+                    st.dataframe(df, use_container_width=True)
+
+                # Add agent response to chat
+                st.session_state.messages.append({"role": "assistant", "content": str(result.get("output", result))})
 
             except Exception as e:
-                error_message = f"An error occurred: {e}"
-                st.session_state.messages.append({"role": "assistant", "content": error_message})
+                st.session_state.messages.append({"role": "assistant", "content": f"An error occurred: {e}"})
 
-        # 4. Trigger a rerun to display the new messages
-        # This will cause the script to run from the top, and the loop above will render the new messages.
+        # Show logs in expander
+        with st.expander("📜 Execution Logs", expanded=False):
+            for log in st.session_state.get("logs", []):
+                st.text(log)
+
         st.rerun()
-# --- Settings tab ---
+
 
 def display_settings():
     st.header("⚙️ Settings")

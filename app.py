@@ -6,9 +6,17 @@ import streamlit as st
 from modules import data_manager, ui_components, agent_manager, vector_store_manager
 from sqlalchemy import inspect
 import plotly.express as px
+import time
 
+# ---------- Helper for AI event logging ----------
+def log_ai_event(message: str):
+    timestamp = time.strftime("%H:%M:%S")
+    log_entry = f"[{timestamp}] {message}"
+    if "logs" not in st.session_state:
+        st.session_state["logs"] = []
+    st.session_state["logs"].append(log_entry)
 
-# Page config
+# ---------- Page config ----------
 st.set_page_config(page_title="🚀 Data Analyst Chatbot", layout="wide")
 
 def ensure_session_state_defaults():
@@ -26,11 +34,13 @@ def ensure_session_state_defaults():
         st.session_state.engine = None
     if "table_names" not in st.session_state:
         st.session_state.table_names = []
+    if "logs" not in st.session_state:
+        st.session_state.logs = []
 
 def main():
     ensure_session_state_defaults()
 
-    # Sidebar - Controls
+    # ---------- Sidebar: Data Source ----------
     with st.sidebar:
         st.title("Controls")
         st.markdown("### 1 — Data Source")
@@ -46,6 +56,7 @@ def main():
             if uploaded_files:
                 engine, table_names = data_manager.handle_csv_uploads(uploaded_files)
                 st.success(f"Loaded {len(uploaded_files)} file(s).")
+                log_ai_event(f"Loaded {len(uploaded_files)} CSV file(s).")
         else:
             st.markdown("**Connect to External DB**")
             with st.form("db_connect_form"):
@@ -61,15 +72,12 @@ def main():
                     engine, table_names = data_manager.handle_external_db_connection(db_params)
                     if engine:
                         st.success("Connected to database.")
+                        log_ai_event(f"Connected to external database at {db_params['host']}:{db_params['port']}.")
                     else:
                         st.error("Connection failed. Check credentials and network.")
+                        log_ai_event("Failed to connect to external database.")
 
-        # Theme toggle
-        st.markdown("---")
-        theme_choice = st.radio("Theme:", ("Light", "Dark"), index=0 if st.session_state.theme == "light" else 1)
-        st.session_state.theme = "light" if theme_choice == "Light" else "dark"
-
-    # If a new engine was created via upload/connect, initialize agent and persist
+    # ---------- Initialize Agent ----------
     if engine is not None and st.session_state.agent_executor is None:
         st.session_state.engine = engine
         st.session_state.table_names = table_names or []
@@ -77,21 +85,19 @@ def main():
         if retriever_tool:
             with st.spinner("Initializing agent..."):
                 st.session_state.agent_executor = agent_manager.initialize_agent(engine, retriever_tool)
+                log_ai_event("Agent initialized.")
         st.rerun()
 
-
-    # Header
-    title_html = """
+    # ---------- Header ----------
+    st.markdown("""
     <h1 style="text-align:center; margin-bottom: 0.1rem;">🚀 Definitive Data Analyst Chatbot</h1>
     <p style="text-align:center; color:gray; margin-top:0.1rem;">Upload • Explore • Visualize • Query with natural language</p>
     <hr style="margin-top: 0.5rem; margin-bottom: 1.0rem;">
-    """
-    st.markdown(title_html, unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
-    # If agent ready show tabs; otherwise prompt configuration
+    # ---------- Tabs ----------
     if st.session_state.agent_executor:
         st.success("✅ Agent is Ready — ask questions or run EDA below.")
-
         tabs = st.tabs(["📊 Automated EDA", "📈 Visualizations", "💬 Chat", "⚙️ Settings"])
         with tabs[0]:
             ui_components.display_automated_eda(st.session_state.engine, st.session_state.table_names)
@@ -103,10 +109,18 @@ def main():
             ui_components.display_settings()
     else:
         st.info("Select and configure a data source via the sidebar to get started.")
-        # show a compact sample area so UI doesn't look empty
         st.markdown("### Quick start")
-        st.markdown("- Upload one or more CSVs in the sidebar, or connect to Postgres/MySQL.")
+        st.markdown("- Upload CSVs or connect to Postgres/MySQL in the sidebar.")
         st.markdown("- After loading, the agent will initialize automatically.")
+
+    # ---------- Execution Logs ----------
+    with st.expander("📜 Execution Logs", expanded=False):
+        logs = st.session_state.get("logs", [])
+        if logs:
+            for log_entry in logs[-50:]:  # show last 50 logs
+                st.text(log_entry)
+        else:
+            st.text("No AI query logs yet.")
 
 if __name__ == "__main__":
     main()
